@@ -7,7 +7,7 @@ def execute_z3_solve_next_two(offset, list_values):
     process = subprocess.Popen(cmd, stdout=subprocess.PIPE, shell=True)
     output, _ = process.communicate()
     output = output.decode("utf-8")
-    output = output.split("\n")[2].split(", ")
+    output = output.split("\n")[1].split(", ")
     return output
 
 def execute_check_next_zeros():
@@ -21,6 +21,7 @@ def execute_check_next_zeros():
 OFFSET = 100
 result = screen_in[:OFFSET]
 
+# sub_600
 VALUES = [140050, 6267691, 5949456, 4919]
 
 # last known values after OFFSET

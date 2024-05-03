@@ -66,6 +66,7 @@ def main_loop(screen_in):
 
 OFFSET = int(sys.argv[1])
 
+# sub_600
 VALUES = [int(x) for x in sys.argv[2:8]]
 LOOKUP = [3084996962, 3211876480, 951376470, 844003128, 3138487787]
 
@@ -84,7 +85,6 @@ for i in range(LN):
 if s.check() == sat:
     print("SAT!")
     m = s.model()
-    print(m)
     print(", ".join([hex(m[screen_plain[i]].as_long()) for i in range(LN)]))
 
 else:

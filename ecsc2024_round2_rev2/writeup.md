@@ -7,21 +7,19 @@ oh no, my device starts shredding everything I put in it...
 $ qemu-system-arm -cpu cortex-m3 -machine lm3s6965evb -kernel arxelerated -semihosting -semihosting-config enable=on,target=native -serial mon:stdio
 ```
 
-## Attachments
-- `arxelerated`
-- `out.enc`
-<br><br>
-
 # INTRODUCTION
 
-A really fun challenge about an obfuscated ARM kernel. 
+A really fun challenge about an obfuscated ARM kernel. It's an engaging puzzle for those familiar with firmware analysis.
 
-You can skip to the summary if you are not interested in the details.
+**Note:** You can skip to the summary if you are not interested in the details.
 
 # FIRST IMPRESSIONS
 
-We are given a firmware file, `arxelerated`, and a QEMU command to run it. The firmware is an ARM Cortex-M3 binary, and the QEMU command is configured to run it on a Cortex-M3 virtual machine.  
-We are also given a `out.enc` file, so we can assume that the firmware is encrypting something and our goal is to retrieve the decrypted data from the given file. 
+Upon examining the provided materials, we encounter two main files:
+
+- `arxelerated`: A firmware file for ARM Cortex-M3.
+- `out.enc`: An encrypted file, presumably containing data we need to decrypt.
+Executing the firmware using the specified QEMU command reveals a beautifully rendered cat image.
 
 By running the given QEMU command, we can see a beautiful cat image. 
 
@@ -80,14 +78,19 @@ We can open the binary in IDA PRO with the `ARM little-endian` processor type an
 </div>
 
 The main function is quite simple. It initializes the system and the `__data_start__`. Then, it calls the `sub_504` function.  
+
+<div style="text-align: center;">
+    <img src="images/14_IDA_504.png" alt="ida" width="70%">
+</div>
+
 By analyzing this function, we can see that it calls the following functions:
 1. `sub_474`, which initializes other the clock and the display;
 2. `OSRAM128x64x4ImageDraw(&unk_20000004, 0, 0, 128, 64);` which, we can assume, draws the cat image on the display;
 3. `UARTCharPut(0x4000C000, '>');` which prints the `>` character on the console;
-4. `UARTCharGet(0x4000C000);` which reads a character from the console;
+4. `UARTCharGet(0x4000C000);` which waits for a character from the console;
 5. `__und(0);` which is an undefined instruction, so the program will get some exception here. 
 
-Let's use GDB to debug the binary and see what is happening.  
+Because of the *UND* instruction, we can not understand what the program does only by a static analysis. Let's use GDB to debug the binary and see what is happening.  
 We add `-S -s` to the QEMU command to freeze the CPU at startup and wait for a GDB connection. Then, we open GDB and connect to the QEMU instance. 
 
 ```bash
@@ -104,23 +107,49 @@ $ gdb-multiarch
 > target remote localhost:1234
 [...]
 
-> b *0x54A
+> break *0x54A
 [...]
 
-> c
+> continue
 [...]
 
 > x/i $pc
 => 0x54a <frame_dummy+290>:     udf     #0
 
-> n
+> next
+[...]
+
 > x/i $pc
 => 0x6cc <frame_dummy+676>:     tst.w   lr, #4
 ```
 
 We can see that the program jumps to the `sub_6CC` function that handles the interrupt, like an ***Interrupt Service Routine***. Here, the Current Program Status Register (CPSR) is saved and it is used to call a function pointed by `off_F80`. We can assume that this is the ***IRQ vector table***.
 
-In this case, when the execution reaches the BLX instruction, we can see that the program jumps to the `sub_600` function, which is the first function in the IRQ vector table.  
+<div style="text-align: center;">
+    <img src="images/15_IDA_6CC.png" alt="ida" width="85%">
+</div>
+
+
+In this case, when the execution reaches the BLX instruction at `0x708`, we can see that the program jumps to the `sub_600` function, which is the first function in the IRQ vector table:
+
+```
+> break *0x708
+[...]
+
+> continue
+[...]
+
+> x/i $pc
+=> 0x708 <frame_dummy+736>:     blx     r5
+
+> next
+[...]
+
+> x/i $pc
+=> 0x600 <frame_dummy+472>:     push    {r4}
+```
+
+
 We can guess that the immediate value passed to the UND instruction is the index of the function in the IRQ vector table.
 By using IDA python, we can extract all the addresses where there is a UND instruction to see if the guess is true.
 
@@ -155,13 +184,13 @@ UND arguments:
 ['0x1', '0x3', '0x4', '0x3', '0x2', '0x0', '0xff', '0xff']
 ```
 
-If we put a breakpoint to this addresses, we can see that the program jumps to the functions pointed by the IRQ vector table at the corresponding index. So the guess was correct.
+If we put a breakpoint to this addresses, we can see that the program jumps to the functions pointed by the IRQ vector table at the corresponding index (except for 0xff arguments, whose instruction are never reached). So the guess was correct.
 Furthermore, we can notice that when the program jumps to the functions in the IRQ vector table, the registers are the same as the ones during the UND instruction. 
 
 # DEOBFUSCATION
 
-To see some nice pseudo-code, we need to patch the UND instructions with a call to the corresponding function.  
-The problem is that BL instruction is 4 bytes long, while the UND instruction is 2 bytes long. By double-clicking the addresses in the IDA python console, we can inspect the UND instructions and see that most of the time they are preceded by unuseful instructions. Therefore, we can use this space to insert the BL instruction.  
+To see some nice pseudo-code from the callers, we need to patch the UND instructions with a call to the corresponding function.  
+The problem is that BL instruction is 4 bytes long, while the UND instruction is 2 bytes long. By double-clicking the addresses in the IDA python console, we can inspect the UND instructions and see that most of the time they are preceded by the useless instruction `MOV r3, r3`. Therefore, we can use this space to insert the BL instruction.  
 The BL instruction is PC-relative, so we need to calculate the offset between the UND instruction and the function we want to call. 
 
 ```python
@@ -202,7 +231,7 @@ def patch_UNDs():
 ```
 
 We can see modifications in the code, but we need to patch the 0x4C0 UND before seeing the pseudo-code.  
-Here, there is no unuseful instruction before the UND instruction, so we need to find some space to insert the BL instruction.
+Here, there is no obvious useless instruction before the UND instruction, so we need to find some space to insert the BL instruction.
 
 ```
 .text:000004AC                 PUSH    {R4-R6,LR}
@@ -266,10 +295,10 @@ We can give a better look to the `sub_504` function, which is the function calle
 
 ## Main Loop
 
-The loop takes two consecutive 4 byte values from the screen buffer and xors them with the two previous calculated values. Then, it calls the `sub_4AC` function with the result and updates the *prev* values.  
+The loop takes two consecutive 4 byte values from the screen buffer and xors them with the two previous calculated values (initially zero). Then, it calls the `sub_4AC` function with the result and updates the *prev* values.  
 After that, it performs a sleep, draws the new screen buffer and updates the indexes.  
 
-By analyzing the `sub_4AC` function, we can see that it is an encryption function that performs xor and ror operations on the input values by calling the `sub_660` function, while printing ten dots on the console. 
+By analyzing the `sub_4AC` function, we can see that it is an encryption function that performs xor and ror operations on the input values by calling the IRQ vector table functions, including the `sub_660` function, while printing ten dots on the console. 
 
 <div style="text-align: center;">
     <img src="images/12_IDA_660.png" alt="sub_4AC" width="80%">
@@ -278,8 +307,33 @@ By analyzing the `sub_4AC` function, we can see that it is an encryption functio
 At this point, I was not able to guess the [CRAX Block Cypher algorithm](https://sparkle-lwc.github.io/crax), so I decided to rewrite the encryption function in Python and decrypt it by using z3.  
 
 # SOLVING
+
+By analyzing the encryption function, we can see that the next 2 values depend only on the 2 previously encrypted values and some lookup values (at 0x20001034 and 0xF98,probably some sort of an encryption key).  
+Furthermore, as we said in the overview section, the first 800 hex char are the same for the actual output and the one given as attachment. So, we can use that last 8 bytes to start our encryption emulation.
+
 Instead of decrypting all at once, I decrypted 8 bytes at a time, in order to avoid the memory limit of z3. In fact, by having the previous 8 bytes, z3 is able to decrypt the next 8 bytes in a reasonable time.  
-The script was quite slow and I saw that the decrypted data was quite full of zeros. Therefore, I changed the solve script in order to check if the decrypted 8 bytes where zeros by encrypting them and comparing the result with the encrypted data. Only if the encrypted data does not match, I calculate them with z3. 
+
+```python
+[...] # from z3_solve_next_two.py
+
+# I only need the next 2 VALUES
+LN = 2
+
+screen_plain = [BitVec(f"screen_plain_{i}", 32) for i in range(LN)]
+screen_cp = [x for x in screen_plain]
+screen_enc = main_loop(screen_cp)
+
+s = Solver()
+for i in range(LN):
+    s.add(screen_enc[i] == screen_out[i + OFFSET])
+
+if s.check() == sat:
+    print("SAT!")
+    m = s.model()
+    print(", ".join([hex(m[screen_plain[i]].as_long()) for i in range(LN)]))
+```
+
+Even by solving for 2 values at a time, the script was quite slow and I saw that the decrypted data was quite full of zeros. Therefore, I changed the solve script in order to check if the decrypted 8 bytes where zeros by encrypting them and comparing the result with the encrypted data. Only if the encrypted data does not match, I calculate them with z3. 
 
 ```python
 [...] # from solve.py
@@ -288,6 +342,7 @@ The script was quite slow and I saw that the decrypted data was quite full of ze
 OFFSET = 100
 result = screen_in[:OFFSET]
 
+# sub_600
 VALUES = [140050, 6267691, 5949456, 4919]
 
 # last known values after OFFSET
@@ -299,10 +354,10 @@ for i in range(0, 1024-OFFSET, 2):
         next_two = ['0x0', '0x0']
 
     else:
-        next_two = execute_z3_solve_next_two(OFFSET+i, val + [140050, 6267691, 5949456, 4919])
+        next_two = execute_z3_solve_next_two(OFFSET+i, prev + VALUES)
 
     result += next_two
-    val = [screen_out[OFFSET+i], screen_out[OFFSET+i+1]]
+    prev = [screen_out[OFFSET+i], screen_out[OFFSET+i+1]]
 
 [...]
 ```
