@@ -17,9 +17,13 @@ def execute_check_next_zeros():
     output = output.decode("utf-8")
     return "Success\n" in output
 
+
+with open("result.py", "w") as f:
+        f.write("result = []")
+
 # first 800 hex_char (= 400 bytes = 100 _DWORD) are the same
 OFFSET = 100
-result = screen_in[:OFFSET]
+result = list(map(str, screen_in[:OFFSET]))
 
 # sub_600
 VALUES = [140050, 6267691, 5949456, 4919]
@@ -30,10 +34,9 @@ prev = [3983684781, 1999312935]
 for i in range(0, 1024-OFFSET, 2):
 
     # print the prev encryption
-    print(i, end="\t")
+    print(i + OFFSET - 2, end="\t")
     for v in prev:
-        a = hex(v)[2:]
-        print(a[6:8] + a[4:6] + a[2:4] + a[0:2], end="\t")
+        print(hex(v), end="\t")
     print()
 
     if execute_check_next_zeros():
@@ -45,7 +48,6 @@ for i in range(0, 1024-OFFSET, 2):
     result += next_two
     prev = [screen_out[OFFSET+i], screen_out[OFFSET+i+1]]
     
-
     with open("result.py", "w") as f:
         f.write("result = [" + ", ".join(result) + "]")
 
@@ -53,6 +55,7 @@ for i in range(0, 1024-OFFSET, 2):
 # write the result in a byte array
 screen_pl = []
 for x in result:
+    x = int(x, 16)
     for i in range(4):
         screen_pl.append((x >> (8 * i)) & 0xff)
 
