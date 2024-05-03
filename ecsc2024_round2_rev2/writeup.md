@@ -15,7 +15,7 @@ A really fun challenge about an obfuscated ARM kernel. It's an engaging puzzle f
 
 # FIRST IMPRESSIONS
 
-Upon examining the provided materials, we encounter two main files:
+By examining the provided materials, we encounter two main files:
 
 - `arxelerated`: A firmware file for ARM Cortex-M3.
 - `out.enc`: An encrypted file, presumably containing data we need to decrypt.
@@ -38,7 +38,7 @@ Upon entering a key, numerous dots begins to appear on the console while the ima
 d0f5d8cadc1abc0b[...]6b6b33eb
 ```
 
-The length of the hex string matches that found in the out.enc file, and its prefix coincides with the beginning of the encrypted file.
+The length of the hex string matches that found in the `out.enc` file, and its prefix coincides with the beginning of the encrypted file.
 Repeated executions of the QEMU command confirm the hex string's consistency, suggesting deterministic encryption. It's plausible to infer that the out.enc file encrypts data related to the challenge's objective, possibly the flag.
 
 # UNDERSTANDING THE FLOW
@@ -71,14 +71,16 @@ OSRAM128x64x4Clear
 OSRAM128x64x4ImageDraw
 OSRAM128x64x4Enable
 ```
+<br>
 
 Opening the binary in IDA PRO with the ARM little-endian processor type provides a closer look at its structure:
 
 <div style="text-align: center;">
     <img src="images/3_IDA_start.png" alt="ida" width="70%">
 </div>
+<br>
 
-The main function primarily initializes the system and then calls the `sub_504` function, which performs several critical operations:
+The `start` function primarily initializes the system and then calls the `sub_504` function, which performs several critical operations:
 
 1. `sub_474`: Initializes the clock and display.
 2. `OSRAM128x64x4ImageDraw(&unk_20000004, 0, 0, 128, 64)`: which, we can assume, draws the cat image on the display.
@@ -89,6 +91,7 @@ The main function primarily initializes the system and then calls the `sub_504` 
 <div style="text-align: center;">
     <img src="images/14_IDA_504.png" alt="ida" width="70%">
 </div>
+<br>
 
 Because of the *UDF instruction*, we can not understand what the program does only by a static analysis. Let's use GDB to debug the binary and see what is happening. 
 
@@ -114,13 +117,14 @@ $ gdb-multiarch
 > x/i $pc
 => 0x6cc <frame_dummy+676>:     tst.w   lr, #4
 ```
+<br>
 
 We can see that the program jumps to the `sub_6CC` function that handles the interrupt, like an **Interrupt Service Routine**. Here, the *Current Program Status Register (CPSR)* is saved and it is used to call a function pointed by `off_F80`. We can assume that this is the **IRQ vector table**.
 
 <div style="text-align: center;">
     <img src="images/15_IDA_6CC.png" alt="ida" width="85%">
 </div>
-
+<br>
 
 In this case, when the execution reaches the *BLX instruction* at `0x708`, the program jumps to the `sub_600` function, which is the first function in the **IRQ vector table**:
 
@@ -136,6 +140,7 @@ In this case, when the execution reaches the *BLX instruction* at `0x708`, the p
 > x/i $pc
 => 0x600 <frame_dummy+472>:     push    {r4}
 ```
+<br>
 
 Because of the *UDF instruction* was called with the parameter `#0`, we can guess that this argument represents the index of the function in the IRQ vector table that will be called by the handler.  
 
@@ -172,6 +177,7 @@ UND addresses:
 UND arguments:
 ['0x1', '0x3', '0x4', '0x3', '0x2', '0x0', '0xff', '0xff']
 ```
+<br>
 
 If we put a breakpoint to this addresses inside **GDB**, we can see that the program jumps to the functions pointed by the **IRQ vector table** at the corresponding index (except for 0xff arguments, whose instruction are never reached). So the guess was correct!  
 Furthermore, we can notice that when the program jumps to the functions in the **IRQ vector table**, the registers are the same as the ones during the *undefined instruction*. 
@@ -179,7 +185,7 @@ Furthermore, we can notice that when the program jumps to the functions in the *
 # DEOBFUSCATION
 
 To see some comprehensible pseudo-code from function callers, we aim to replace the *UDF instructions* with calls to their corresponding handler functions. However, there's a problem: the Branch Link (BL) instruction spans 4 bytes, while *UDF instructions* are only 2 bytes long.  
-By double-clicking the calculated addresses in the *IDA python* console, we can inspect the *UDF instructions* and see that most of the time they are preceded by a redundant instruction `MOV r3, r3`. This extra space provides an opportunity to insert the *BL instruction*.  
+By double-clicking the calculated addresses in the *IDA python* console, we can inspect the *UDF instructions* and see that most of the time they are preceded by a redundant instruction `MOV R3, R3`. This extra space provides an opportunity to insert the *BL instruction*.  
 
 ## BL instruction Offsets
 The *BL instruction* is PC-relative, so we need to calculate the offset between the *UDF instruction* and the function we want to call. 
@@ -229,8 +235,9 @@ def patch_UNDs():
 > patch_UNDs()
 
 ```
+<br>
 
-While most UNDs can be patched using the above method, the UND at 0x4C0 lacks a preceding redundant instruction to repurpose. Reviewing the surrounding instructions reveals a potential optimization to get some space for the patch:
+While most *UDF instructions* can be patched using the above method, the one at `0x4C0` lacks a preceding redundant instruction to repurpose. Reviewing the surrounding instructions reveals a potential optimization to get some space for the patch:
 
 ```assembly
 .text:000004AC                 PUSH    {R4-R6,LR}
@@ -245,6 +252,8 @@ While most UNDs can be patched using the above method, the UND at 0x4C0 lacks a 
 .text:000004BE                 MOV     R3, R4
 .text:000004C0                 UND     #1
 ```
+<br>
+
 
 
 As we can see, the registers R2 and R3 are used to store values pointed by R0 and R1, but then they are overwritten with R4. 
@@ -262,6 +271,7 @@ We can load those values directly into R0 and R1 without wasting instructions, b
 .text:000004BC                 NOP
 .text:000004BE                 BL      sub_614
 ```
+<br>
 
 After updating the interested code with the shortcuts *U*, *C* and *P*, we can see the pseudo-code of the functions `sub_504` and `sub_4AC`:
 
@@ -272,6 +282,7 @@ After updating the interested code with the shortcuts *U*, *C* and *P*, we can s
 <br>
 And now the challenge begins.
 <br><br>
+
 
 # REVERSE ENGINEERING
 
@@ -337,6 +348,7 @@ if s.check() == sat:
     m = s.model()
     print(", ".join([hex(m[screen_plain[i]].as_long()) for i in range(LN)]))
 ```
+<br>
 
 Given the slow performance of the decryption script and the prevalence of zeros in the decrypted data, we can refine the script to first check if the decrypted 8 bytes were zeros by encrypting them and comparing the result to the encrypted data. If they did not match, only then would we employ z3 for decryption.
 
@@ -366,6 +378,7 @@ for i in range(0, 1024-OFFSET, 2):
 
 [...]
 ```
+<br>
 
 ## Patching the Screen Buffer
 
@@ -383,6 +396,7 @@ for i in range(0, len(screen_pl)):
     patch_byte(SCREEN_ADDR+i, screen_pl[i])
 
 ```
+<br>
 
 Upon executing the patched binary in QEMU, the display shows the flag:
 
