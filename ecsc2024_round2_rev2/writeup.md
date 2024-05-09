@@ -1,4 +1,5 @@
 # openECSC 2024 - Round 2
+
 ## [rev] arxelerated (21 solves)
 
 oh no, my device starts shredding everything I put in it...
@@ -7,13 +8,36 @@ oh no, my device starts shredding everything I put in it...
 $ qemu-system-arm -cpu cortex-m3 -machine lm3s6965evb -kernel arxelerated -semihosting -semihosting-config enable=on,target=native -serial mon:stdio
 ```
 
-# INTRODUCTION
+Writeup author: <@kristoj>  
+Challenge author: <@Rising>
+
+## Table of contents
+- [Introduction](#introduction)
+- [First impression](#first-impression)
+- [Understanding the flow](#understanding-the-flow)
+  - [Initial static analysis](#initial-static-analysis)
+  - [Dynamic analysis](#dynamic-analysis)
+  - [Undefined instruction handling](#undefined-instruction-handling)
+- [Deobfuscation](#deobfuscation)
+  - [BL instruction offsets](#bl-instruction-offsets)
+  - [Patching the binary](#patching-the-binary)
+- [Reverse engineering](#reverse-engineering)
+  - [Main loop](#main-loop)
+    - [sub_4AC](#sub_4ac)
+- [Solving the encryption](#solving-the-encryption)
+  - [Dependency Analysis](#dependency-analysis)
+  - [Z3 solver](#z3-solver)
+  - [Patching the screen buffer](#patching-the-screen-buffer)
+- [Summary](#summary)
+- [Attachments](#attachments)
+
+## Introduction
 
 A really fun challenge about an obfuscated ARM kernel. It's an engaging puzzle for those familiar with firmware analysis.
 
 **Note:** You can skip to the summary if you are not interested in the details.
 
-# FIRST IMPRESSIONS
+## First impression
 
 By examining the provided materials, we encounter two main files:
 
@@ -21,7 +45,6 @@ By examining the provided materials, we encounter two main files:
 - `out.enc`: An encrypted file, presumably containing data we need to decrypt.
 
 Executing the firmware using the specified QEMU command reveals a beautifully rendered cat image.
-
 
 <div style="text-align: center;">
     <img src="images/1_QEMU_cat.png" alt="cat" width="70%">
@@ -41,9 +64,9 @@ d0f5d8cadc1abc0b[...]6b6b33eb
 The length of the hex string matches that found in the `out.enc` file, and its prefix coincides with the beginning of the encrypted file.
 Repeated executions of the QEMU command confirm the hex string's consistency, suggesting deterministic encryption. It's plausible to infer that the out.enc file encrypts data related to the challenge's objective, possibly the flag.
 
-# UNDERSTANDING THE FLOW
+## Understanding the flow
 
-## Initial Static Analysis
+### Initial static analysis
 By executing the file command on the arxelerated file, we ascertain that it is an ARM ELF binary, characterized by the following properties: 
 
 ```bash
@@ -95,7 +118,7 @@ The `start` function primarily initializes the system and then calls the `sub_50
 
 Because of the *UDF instruction*, we can not understand what the program does only by a static analysis. Let's use GDB to debug the binary and see what is happening. 
 
-## Dynamic Analysis
+### Dynamic analysis
 Due to the *UDF instruction*, static analysis alone is insufficient. We proceed with dynamic analysis using GDB connected to a QEMU instance configured to halt at startup, by adding the `-S -s` flags to the QEMU command. 
 
 ```bash
@@ -142,9 +165,9 @@ In this case, when the execution reaches the *BLX instruction* at `0x708`, the p
 ```
 <br>
 
-Because of the *UDF instruction* was called with the parameter `#0`, we can guess that this argument represents the index of the function in the IRQ vector table that will be called by the handler.  
+Because of the *UDF instruction* was called with the parameter `#0`, we can guess that this argument represents the index of the function in the **IRQ vector table** that will be called by the handler.  
 
-## Undefined Instruction Handling
+### Undefined instruction handling
 By using *IDA python*, we can extract all the addresses where there is a *UDF instruction* to see if the guess is true.
 
 ```python
@@ -182,12 +205,12 @@ UND arguments:
 If we put a breakpoint to this addresses inside **GDB**, we can see that the program jumps to the functions pointed by the **IRQ vector table** at the corresponding index (except for 0xff arguments, whose instruction are never reached). So the guess was correct!  
 Furthermore, we can notice that when the program jumps to the functions in the **IRQ vector table**, the registers are the same as the ones during the *undefined instruction*. 
 
-# DEOBFUSCATION
+## Deobfuscation
 
 To see some comprehensible pseudo-code from function callers, we aim to replace the *UDF instructions* with calls to their corresponding handler functions. However, there's a problem: the Branch Link (BL) instruction spans 4 bytes, while *UDF instructions* are only 2 bytes long.  
 By double-clicking the calculated addresses in the *IDA python* console, we can inspect the *UDF instructions* and see that most of the time they are preceded by a redundant instruction `MOV R3, R3`. This extra space provides an opportunity to insert the *BL instruction*.  
 
-## BL instruction Offsets
+### BL instruction offsets
 The *BL instruction* is PC-relative, so we need to calculate the offset between the *UDF instruction* and the function we want to call. 
 
 ```python
@@ -210,7 +233,7 @@ def calculate_BL_bytes(source, destination):
 
 After some trial and error, we can see that it returns the correct bytes for the *BL instruction* that will call the function pointed by the destination address. 
 
-## Patching the Binary
+### Patching the binary
 We can automatize the patching process:
 
 ```python
@@ -284,7 +307,7 @@ And now the challenge begins.
 <br><br>
 
 
-# REVERSE ENGINEERING
+## Reverse engineering
 
 We can give a better look to the `sub_504` function, which is the function called by the `start` function:
 - *Initialization*:
@@ -304,11 +327,11 @@ We can give a better look to the `sub_504` function, which is the function calle
     <img src="images/11_IDA_504.png" alt="sub_504_1" width="70%">
 </div>
 
-## Main Loop
+### Main loop
 
 The loop operates by taking two consecutive 4-byte values from the screen buffer and XORing them with two previously calculated values (initially set to zero). It then passes the result to the `sub_4AC` function and updates the previous values. Subsequently, the loop induces a sleep period, redraws the screen buffer, and updates the indexes.
 
-### sub_4AC
+#### sub_4AC
 
 By analyzing this function, we can notice it is an encryption routine that manipulates the input values through *XOR and ROR operations*. These operations are orchestrated by calling functions from the **IRQ vector table**, including `sub_660`, while simultaneously outputting ten dots on the console.
 
@@ -319,13 +342,13 @@ By analyzing this function, we can notice it is an encryption routine that manip
 
 At this point, I was not able to guess the [CRAX Block Cypher algorithm](https://sparkle-lwc.github.io/crax), so I decided to rewrite the encryption function in Python and decrypt it by using z3.  
 
-# SOLVING THE ENCRYPTION
+## Solving the encryption
 
-## Dependency Analysis
+### Dependency analysis
 
 The encryption function's behavior indicates that each pair of new values depends solely on the two previously encrypted values and specific lookup values (located at `0x20001034` and `0xF98`), which likely function as part of an encryption key. From our initial observations noted in the overview, the first 800 hexadecimal characters of the output and the attached file are identical. This allows us to use the last 8 common bytes as a starting point for our encryption emulation.
 
-## Z3 Solver
+### Z3 solver
 
 To manage z3's memory constraints effectively, we opt to decrypt the data 8 bytes at a time. This strategy is efficient because knowing the previous 8 bytes enables z3 to decrypt the next 8 bytes within a reasonable timeframe.
 
@@ -380,7 +403,7 @@ for i in range(0, 1024-OFFSET, 2):
 ```
 <br>
 
-## Patching the Screen Buffer
+### Patching the screen buffer
 
 After approximately one hour of execution, the decrypted data was stored in the `screen_pl.py` file. Using *IDA Python*, we patch the binary to display what was on the screen prior to encryption, instead of the default cat image:
 
@@ -405,10 +428,10 @@ Upon executing the patched binary in QEMU, the display shows the flag:
 </div>
 
 
-# SUMMARY
+## Summary
 This challenge revolves around an ARM kernel that encrypts the screen buffer, displaying encrypted data similar to the provided `out.enc` file on the console.
 
-The initial step involves deobfuscating the binary. This is accomplished by tracing its execution using gdb-multiarch combined with QEMU's -S -s options, allowing for an in-depth analysis of the binary's operations. Key to this process is patching the undefined (UND) instructions with appropriate handlers from the IRQ vector table. 
+The initial step involves deobfuscating the binary. This is accomplished by tracing its execution using gdb-multiarch combined with QEMU's -S -s options, allowing for an in-depth analysis of the binary's operations. Key to this process is patching the undefined (UDF) instructions with appropriate handlers from the IRQ vector table. 
 
 Through detailed examination of the pseudo-code, the encryption is identified as a CRAX Block Cipher algorithm.
 
@@ -416,5 +439,11 @@ To reverse the encryption, we can employ the CRAX Block Cipher's decryption func
 
 With the decryption complete, we patch the binary and run it in QEMU, revealing the flag on the screen buffer.
 
-
-
+## Attachments
+- [check_next_are_zeros.py](attachments/check_next_are_zeros.py)
+- [out.py](attachments/out.py)
+- [result.py](attachments/result.py)
+- [screen_in.py](attachments/screen_in.py)
+- [screen_pl.py](attachments/screen_pl.py)
+- [solve.py](attachments/solve.py)
+- [z3_solve_next_two.py](attachments/z3_solve_next_two.py)
