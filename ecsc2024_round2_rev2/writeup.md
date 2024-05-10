@@ -37,6 +37,8 @@ A really fun challenge about an obfuscated ARM kernel. It's an engaging puzzle f
 
 **Note:** You can skip to the summary if you are not interested in the details.
 
+**P.S.:** You can read this article from the [ecsc2024 website](https://ecsc2024.it/openECSC/round-2/writeups/arxelerated), as winner of the second round writeup competition. 
+
 ## First impression
 
 By examining the provided materials, we encounter two main files:
